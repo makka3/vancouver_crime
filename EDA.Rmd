@@ -1,0 +1,243 @@
+---
+title: "bikethefts"
+output: html_document
+---
+
+```{r}
+
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(leaflet))
+library(lubridate)
+library(PBSmapping)
+library(rgdal)
+library(here)
+library(sf)
+```
+
+
+```{r}
+
+
+crime <- read_csv("../../../mds/3_term/22_workflows/DSCI_522_Vancouver_Bike_Theft_Analysis/data/crime_csv_all_years.csv")
+
+
+head(crime)
+
+
+crime
+```
+
+```{r}
+
+summary(crime)
+
+```
+
+# What types of crime are present in the data?
+
+```{r}
+
+crime %>%
+  distinct(TYPE)
+```
+
+
+
+# How many of each type of crime do we have in our dataset?
+
+```{r}
+
+crime %>%
+  group_by(TYPE) %>%
+  summarize(counts = n()) %>%
+  arrange(desc(counts))
+
+# Note: Theft of vehicle is by far the most.
+
+```
+
+## Counts of car theft reported at each hour of the day
+
+```{r}
+
+car_theft <- crime %>%
+  filter(TYPE == "Theft from Vehicle") 
+
+car_theft %>%
+  ggplot(aes(x=HOUR)) +
+  geom_bar()
+
+
+```
+
+
+```{r}
+
+# Counts of thefts from cars for each year between 2003 and 2018*
+
+car_theft %>%
+  ggplot(aes(x=YEAR)) +
+  geom_bar()
+
+
+```
+
+How many neighborhoods do we have in the dataset?
+
+```{r}
+
+car_theft %>%
+  distinct(NEIGHBOURHOOD)
+
+
+car_theft %>%
+  group_by(NEIGHBOURHOOD) %>%
+  summarize(count = n())
+
+car_theft <- car_theft %>%
+  drop_na(NEIGHBOURHOOD)
+
+
+```
+
+```{r}
+
+
+class(car_theft$YEAR)
+
+# Making date time column to look at seasonality
+
+car_theft %>%
+  mutate(season = lubridate::make_date(YEAR,MONTH,DAY)) %>%
+  group_by(season) %>%
+  summarize(counts_per_day = n()) %>%
+  ggplot(aes(x=season,counts_per_day)) +
+  geom_line() +
+  geom_smooth(method="loess")
+  
+  
+  #select(HUNDRED_BLOCK,NEIGHBOURHOOD,X,Y,dt)
+
+  #car_dt
+  
+# Plotting counts of thefts from cars by month across all years
+
+car_theft %>%
+  group_by(YEAR,MONTH) %>%
+  summarize(cou = n()) %>%
+  ggplot(aes(as.numeric(MONTH),cou)) +
+  geom_line() +
+  facet_wrap(~YEAR) +
+  scale_x_continuous(labels = scales::number_format(accuracy = 1))
+```
+
+## Looking at data between 2003 and 2017 (omitting 2018 because it is incomplete), do we see any variation between summer and winter months. Looking at the plot above it does not appear as though there is any significant difference.
+
+```{r}
+
+car_theft %>%
+  filter(!YEAR==2018) %>%
+  mutate(is_summer = if_else(MONTH %in% c("06","07","08"),TRUE,FALSE),is_winter = if_else(MONTH %in% c("12","01","02"),TRUE,FALSE),
+         is_spring = if_else(MONTH %in% c("03","04","05"),TRUE,FALSE),is_fall = if_else(MONTH %in% c("09","10","11"),TRUE,FALSE)) %>%
+  count(is_summer,is_winter,is_fall,is_spring)
+
+```
+
+Incredible. The number of car thefts is nearly the same across all the seasons. The lowest being in winter at 43000 and the highest being Fall at 47000. Over 14 years, that difference is nearly negligible.
+
+# Mapping theft from cars for 2004 in Vancouver
+
+```{r}
+
+theft_04 <- car_theft %>%
+  filter(YEAR == 2004) %>%
+  select(NEIGHBOURHOOD,X,Y)
+
+van_map <- leaflet() %>% setView(lat = 49.25,lng = -123.1,zoom=12) %>% addTiles()
+
+#van_map
+
+# Converting UTM coordinates to Lat and Long (Resource: http://rstudio-pubs-static.s3.amazonaws.com/20030_670aec6b742448848a03e3441ea3828b.html))
+
+utms <- SpatialPoints(theft_04[, c("X", "Y")],
+                      proj4string=CRS("+proj=utm +zone=10"))
+
+longlats <- spTransform(utms, CRS("+proj=longlat"))
+
+# Plugging them back into the dataset
+
+theft_04$X <- longlats$X
+
+theft_04$Y <- longlats$Y
+
+theft_04 %>%
+  summary()
+
+#van_map <- van_map %>%
+#  addMarkers(data=theft_04,~X,~Y,clusterOptions = markerClusterOptions())
+  #addCircles(data=theft_04,~X,~Y)
+
+```
+
+```{r}
+
+# Resource to load kml file: https://journocode.com/2016/01/28/your-first-choropleth-map/
+# Resource for Polygon info: https://data.vancouver.ca/datacatalogue/localareaboundary.htm
+
+vancouver <- readOGR("cov_localareas.kml",layer = "local_areas_region",encoding = "latin-1")
+
+vancouver <- st_read("cov_localareas.kml",layer = "local_areas_region")
+
+# Testing out our polygon file
+
+plot(vancouver)
+
+file.exists("local_area_boundary.shp")
+
+areas <- st_read("local_area_boundary.shp")
+
+
+van_map %>%
+  addPolygons(data = vancouver)
+
+```
+
+```{r}
+
+#plot(vancouver)
+```
+
+```{r}
+
+vancouver$Name
+
+```
+# Creating our dataset with counts per neighborhood
+
+```{r}
+
+theft_counts <- theft_04 %>%
+  group_by(NEIGHBOURHOOD) %>%
+  summarize(n=n())
+
+theft_counts
+
+```
+
+It appears as thought there is some descrepancy between the polygon dataset and the crime dataset when it comes to neighborhood names. Luckily, most of them are correct and will be joinable. The ones that aren't will be merged using the `aggregate` function.
+
+```{r}
+
+# Failed attempts at merging rows
+
+aggregate(theft_counts["n"],list(Group=replace(rownames(theft_counts),rownames(theft_counts) %in% c("Central Business District","Stanley Park"), "Downtown")), sum)
+
+theft_counts['Downtown', ] <- theft_counts['Central Business District', ] + theft_counts['Stanley Park', ]
+
+nm <- c("Central Business District","Stanley Park")
+theft_counts[nm[1], ] <- colSums(theft_counts[nm, ])
+theft_counts[!rownames(theft_counts) %in% nm[-1], ]
+
+theft_counts
+
+```
