@@ -1,9 +1,10 @@
 ---
-title: "bikethefts"
-output: html_document
+title: "Exploration of Vancouver Open Crime data"
+output: distill::distill_article
+always_allow_html: yes
 ---
 
-```{r}
+```{r include=FALSE,warning=FALSE}
 
 suppressPackageStartupMessages(library(tidyverse))
 suppressPackageStartupMessages(library(leaflet))
@@ -12,49 +13,98 @@ library(PBSmapping)
 library(rgdal)
 library(here)
 library(sf)
+library(ggthemes)
+library(kableExtra)
 ```
 
+```{r layout="l-page"}
+knitr::include_graphics("van.jpg")
+```
 
-```{r}
+## Reading in the data
+
+```{r include=TRUE}
 
 
 crime <- read_csv("../../../mds/3_term/22_workflows/DSCI_522_Vancouver_Bike_Theft_Analysis/data/crime_csv_all_years.csv")
 
-
-head(crime)
-
-
-crime
 ```
 
-```{r}
+```{r layout="l-body-outset"}
+
+head(crime) %>%
+  kable() %>%
+  kable_styling()
+
+```
+
+```{r include=FALSE}
 
 summary(crime)
 
 ```
 
-# What types of crime are present in the data?
-
-```{r}
-
-crime %>%
-  distinct(TYPE)
-```
-
-
-
 # How many of each type of crime do we have in our dataset?
 
-```{r}
+```{r layout="l-body-outset"}
 
 crime %>%
   group_by(TYPE) %>%
   summarize(counts = n()) %>%
-  arrange(desc(counts))
-
-# Note: Theft of vehicle is by far the most.
+  arrange(desc(counts)) %>%
+  kable() %>%
+  kable_styling(bootstrap_options = "basic")
 
 ```
+
+## Counts of total crime by area
+
+```{r, layout="l-body-outset"}
+
+crime %>%
+  group_by(NEIGHBOURHOOD,YEAR) %>%
+  summarize(n=n()) %>%
+  drop_na() %>%
+  mutate(prop_total = n/sum(n)) %>%
+  ggplot(aes(x=YEAR,y=NEIGHBOURHOOD)) +
+  geom_tile(aes(fill=prop_total)) +
+  theme(legend.position="none") +
+  theme_light()
+
+```
+
+Crime counts over time by type of crime
+
+```{r}
+
+crime %>%
+  filter(!TYPE %in% c("Homicide","Vehicle Collision or Pedestrian Struck (with Fatality)")) %>%
+  mutate(my = lubridate::make_date(YEAR,MONTH)) %>%
+  group_by(my,TYPE) %>%
+  summarise(n=n()) %>%
+  drop_na() %>%
+  ggplot(aes(x=my, y=n)) +
+  geom_line() +
+  facet_wrap(~TYPE,scales = "free")
+
+```
+
+Total crime counts over time by neighbourhood
+
+```{r}
+
+crime %>%
+  mutate(my = lubridate::make_date(YEAR,MONTH)) %>%
+  group_by(my,NEIGHBOURHOOD) %>%
+  summarise(n=n()) %>%
+  drop_na() %>%
+  ggplot(aes(x=my, y=n)) +
+  geom_line() +
+  facet_wrap(~NEIGHBOURHOOD,scales = "free")
+
+```
+
+# Car thefts in Vancouver
 
 ## Counts of car theft reported at each hour of the day
 
@@ -63,9 +113,14 @@ crime %>%
 car_theft <- crime %>%
   filter(TYPE == "Theft from Vehicle") 
 
+```
+
+```{r}
+
 car_theft %>%
   ggplot(aes(x=HOUR)) +
-  geom_bar()
+  geom_bar(fill="red") +
+  scale_fill_economist()
 
 
 ```
@@ -77,33 +132,31 @@ car_theft %>%
 
 car_theft %>%
   ggplot(aes(x=YEAR)) +
-  geom_bar()
-
+  geom_bar(fill="red")
 
 ```
 
-How many neighborhoods do we have in the dataset?
+How many neighborhoods do we have in the dataset and how many thefts from cars happened in each?
 
 ```{r}
 
 car_theft %>%
   distinct(NEIGHBOURHOOD)
 
-
 car_theft %>%
   group_by(NEIGHBOURHOOD) %>%
-  summarize(count = n())
+  summarize(count = n()) %>%
+  drop_na(NEIGHBOURHOOD)
 
 car_theft <- car_theft %>%
   drop_na(NEIGHBOURHOOD)
-
 
 ```
 
 ```{r}
 
 
-class(car_theft$YEAR)
+#class(car_theft$YEAR)
 
 # Making date time column to look at seasonality
 
@@ -112,8 +165,8 @@ car_theft %>%
   group_by(season) %>%
   summarize(counts_per_day = n()) %>%
   ggplot(aes(x=season,counts_per_day)) +
-  geom_line() +
-  geom_smooth(method="loess")
+  geom_line(alpha=0.2) +
+  geom_smooth(method="loess",color="red")
   
   
   #select(HUNDRED_BLOCK,NEIGHBOURHOOD,X,Y,dt)
@@ -131,7 +184,26 @@ car_theft %>%
   scale_x_continuous(labels = scales::number_format(accuracy = 1))
 ```
 
-## Looking at data between 2003 and 2017 (omitting 2018 because it is incomplete), do we see any variation between summer and winter months. Looking at the plot above it does not appear as though there is any significant difference.
+## Days of the week
+
+Looking at data between 2003 and 2017 and looking at difference in the days of the week
+
+```{r}
+car_theft %>%
+  filter(!YEAR==2018) %>%
+  mutate(datetime = lubridate::make_date(YEAR,MONTH,DAY)) %>%
+  select(NEIGHBOURHOOD,datetime) %>%
+  mutate(day_of_week = lubridate::wday(datetime)) %>%
+  group_by(day_of_week) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(day_of_week,count)) +
+  geom_col()
+```
+
+
+## Seasons
+
+Looking at data between 2003 and 2017 (omitting 2018 because it is incomplete), do we see any variation between summer and winter months. Looking at the plot above it does not appear as though there is any significant difference.
 
 ```{r}
 
@@ -145,9 +217,9 @@ car_theft %>%
 
 Incredible. The number of car thefts is nearly the same across all the seasons. The lowest being in winter at 43000 and the highest being Fall at 47000. Over 14 years, that difference is nearly negligible.
 
-# Mapping theft from cars for 2004 in Vancouver
+# Mapping theft from cars for 2004 in Vancouver using Leaflet
 
-```{r}
+```{r layout="l-body-outset"}
 
 theft_04 <- car_theft %>%
   filter(YEAR == 2004) %>%
@@ -173,46 +245,88 @@ theft_04$Y <- longlats$Y
 theft_04 %>%
   summary()
 
-#van_map <- van_map %>%
-#  addMarkers(data=theft_04,~X,~Y,clusterOptions = markerClusterOptions())
-  #addCircles(data=theft_04,~X,~Y)
+van_map <- van_map
+  #addMarkers(data=theft_04,~X,~Y,clusterOptions = markerClusterOptions())
+  
+leaflet(options = leafletOptions(preferCanvas = TRUE)) %>% setView(lat = 49.25,lng = -123.1,zoom=12) %>% 
+  addTiles() %>%
+  #addTiles('http://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', 
+	#attribution='Map tiles by <a href="http://stamen.com">Stamen Design</a>, <a href="http://creativecommons.org/licenses/by/3.0">CC BY 3.0</a> &mdash; Map data &copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a>') %>%
+  addCircles(data=theft_04,~X,~Y,color = "red",radius=0.01)
 
 ```
 
-```{r}
+Mapping theft from cars in Vancouver using ggplot2
+
+```{r layout="l-body-outset"}
+
+#Reading in Vancouver neighborhood boundary data
+vancouver <- readOGR("cov_localareas.kml",layer = "local_areas_region")
+
+# Converting map object into dataframe
+van_area <- fortify(vancouver)
+
+head(van_area)
+
+ggplot() +
+  geom_path(data = van_area,aes(long,lat,group=group)) +
+  geom_hex(data = theft_04,aes(X,Y),bins=60,alpha=0.9) +
+  scale_fill_gradient(low="pink1", high="red", name="Density") +
+  theme_void()
+
+```
+
+```{r include=FALSE,eval=FALSE}
 
 # Resource to load kml file: https://journocode.com/2016/01/28/your-first-choropleth-map/
 # Resource for Polygon info: https://data.vancouver.ca/datacatalogue/localareaboundary.htm
 
-vancouver <- readOGR("cov_localareas.kml",layer = "local_areas_region",encoding = "latin-1")
+vancouver <- readOGR("cov_localareas.kml",layer = "local_areas_region")
 
-vancouver <- st_read("cov_localareas.kml",layer = "local_areas_region")
+#vancouver <- st_read("cov_localareas.kml",layer = "local_areas_region")
 
 # Testing out our polygon file
 
 plot(vancouver)
 
-file.exists("local_area_boundary.shp")
-
 areas <- st_read("local_area_boundary.shp")
 
 
+van_area <- fortify(vancouver)
+van_area
+
+van_map
+
+```
+
+# Making a choropleth map of Vancouver
+
+```{r include=FALSE, eval=FALSE}
+
+poly <- vancouver %>%
+  select(Name,geometry)
+
+poly
+
+van
+
+choro <- poly %>%
+  left_join(van,by=c("Name"="NEIGHBOURHOOD"))
+
+choro <- choro %>% drop_na()
+
 van_map %>%
-  addPolygons(data = vancouver)
+  addPolygons(data = choro,color = ~colorQuantile("YlOrRd",van)(van))
+
+leaflet(choro) %>% addTiles() %>% addPolygons(color=~colorQuantile("YlOrRd"))
+
+class(van)
+
+class(choro)
 
 ```
 
-```{r}
-
-#plot(vancouver)
-```
-
-```{r}
-
-vancouver$Name
-
-```
-# Creating our dataset with counts per neighborhood
+## Creating our dataset with counts per neighborhood
 
 ```{r}
 
@@ -220,13 +334,13 @@ theft_counts <- theft_04 %>%
   group_by(NEIGHBOURHOOD) %>%
   summarize(n=n())
 
-theft_counts
+head(theft_counts)
 
 ```
 
 It appears as thought there is some descrepancy between the polygon dataset and the crime dataset when it comes to neighborhood names. Luckily, most of them are correct and will be joinable. The ones that aren't will be merged using the `aggregate` function.
 
-```{r}
+```{r include=FALSE,eval=FALSE}
 
 # Failed attempts at merging rows
 
